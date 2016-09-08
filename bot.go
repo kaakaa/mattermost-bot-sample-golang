@@ -4,25 +4,13 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"regexp"
 	"strings"
 
 	"github.com/mattermost/platform/model"
-)
-
-const (
-	SAMPLE_NAME = "Mattermost Bot Sample"
-
-	USER_EMAIL    = "bot@example.com"
-	USER_PASSWORD = "password1"
-	USER_NAME     = "samplebot"
-	USER_FIRST    = "Sample"
-	USER_LAST     = "Bot"
-
-	TEAM_NAME        = "botsample"
-	CHANNEL_LOG_NAME = "debugging-for-sample-bot"
 )
 
 var client *model.Client
@@ -35,12 +23,11 @@ var debuggingChannel *model.Channel
 
 // Documentation for the Go driver can be found
 // at https://godoc.org/github.com/mattermost/platform/model#Client
-func main() {
-	println(SAMPLE_NAME)
-
+func RunBot(config Config) {
 	SetupGracefulShutdown()
 
-	client = model.NewClient("http://localhost:8065")
+	url := config.Mattermost.HttpURL()
+	client = model.NewClient(url)
 
 	// Lets test to see if the mattermost server is up and running
 	MakeSureServerIsRunning()
@@ -48,27 +35,28 @@ func main() {
 	// lets attempt to login to the Mattermost server as the bot user
 	// This will set the token required for all future calls
 	// You can get this token with client.AuthToken
-	LoginAsTheBotUser()
+	LoginAsTheBotUser(config.Mattermost.Bot)
 
 	// If the bot user doesn't have the correct information lets update his profile
-	UpdateTheBotUserIfNeeded()
+	UpdateTheBotUserIfNeeded(config.Mattermost.Bot)
 
 	// Lets load all the stuff we might need
 	InitialLoad()
 
 	// Lets find our bot team
-	FindBotTeam()
+	FindBotTeam(config.Mattermost.Team)
 
 	// This is an important step.  Lets make sure we use the botTeam
 	// for all future web service requests that require a team.
 	client.SetTeamId(botTeam.Id)
 
 	// Lets create a bot channel for logging debug messages into
-	CreateBotDebuggingChannelIfNeeded()
-	SendMsgToDebuggingChannel("_"+SAMPLE_NAME+" has **started** running_", "")
+	CreateBotDebuggingChannelIfNeeded(config.Mattermost.Channel)
+	SendMsgToDebuggingChannel("_Bot has **started** running_", "")
 
 	// Lets start listening to some channels via the websocket!
-	webSocketClient, err := model.NewWebSocketClient("ws://localhost:8065", client.AuthToken)
+	wsUrl := fmt.Sprintf(config.Mattermost.WsURL())
+	webSocketClient, err := model.NewWebSocketClient(wsUrl, client.AuthToken)
 	if err != nil {
 		println("We failed to connect to the web socket")
 		PrintError(err)
@@ -99,8 +87,8 @@ func MakeSureServerIsRunning() {
 	}
 }
 
-func LoginAsTheBotUser() {
-	if loginResult, err := client.Login(USER_EMAIL, USER_PASSWORD); err != nil {
+func LoginAsTheBotUser(bot Bot) {
+	if loginResult, err := client.Login(bot.Email, bot.Password); err != nil {
 		println("There was a problem logging into the Mattermost server.  Are you sure ran the setup steps from the README.md?")
 		PrintError(err)
 		os.Exit(1)
@@ -109,11 +97,11 @@ func LoginAsTheBotUser() {
 	}
 }
 
-func UpdateTheBotUserIfNeeded() {
-	if botUser.FirstName != USER_FIRST || botUser.LastName != USER_LAST || botUser.Username != USER_NAME {
-		botUser.FirstName = USER_FIRST
-		botUser.LastName = USER_LAST
-		botUser.Username = USER_NAME
+func UpdateTheBotUserIfNeeded(bot Bot) {
+	if botUser.FirstName != bot.First || botUser.LastName != bot.Last || botUser.Username != bot.Name {
+		botUser.FirstName = bot.First
+		botUser.LastName = bot.Last
+		botUser.Username = bot.Name
 
 		if updateUserResult, err := client.UpdateUser(botUser); err != nil {
 			println("We failed to update the Sample Bot user")
@@ -136,21 +124,21 @@ func InitialLoad() {
 	}
 }
 
-func FindBotTeam() {
+func FindBotTeam(t string) {
 	for _, team := range initialLoad.Teams {
-		if team.Name == TEAM_NAME {
+		if team.Name == t {
 			botTeam = team
 			break
 		}
 	}
 
 	if botTeam == nil {
-		println("We do not appear to be a member of the team '" + TEAM_NAME + "'")
+		println("We do not appear to be a member of the team '" + t + "'")
 		os.Exit(1)
 	}
 }
 
-func CreateBotDebuggingChannelIfNeeded() {
+func CreateBotDebuggingChannelIfNeeded(ch Channel) {
 	if channelsResult, err := client.GetChannels(""); err != nil {
 		println("We failed to get the channels")
 		PrintError(err)
@@ -159,7 +147,7 @@ func CreateBotDebuggingChannelIfNeeded() {
 		for _, channel := range channelList.Channels {
 
 			// The logging channel has alredy been created, lets just use it
-			if channel.Name == CHANNEL_LOG_NAME {
+			if channel.Name == ch.Name {
 				debuggingChannel = channel
 				return
 			}
@@ -168,16 +156,16 @@ func CreateBotDebuggingChannelIfNeeded() {
 
 	// Looks like we need to create the logging channel
 	channel := &model.Channel{}
-	channel.Name = CHANNEL_LOG_NAME
-	channel.DisplayName = "Debugging For Sample Bot"
-	channel.Purpose = "This is used as a test channel for logging bot debug messages"
+	channel.Name = ch.Name
+	channel.DisplayName = ch.DisplayName
+	channel.Purpose = ch.Purpose
 	channel.Type = model.CHANNEL_OPEN
 	if channelResult, err := client.CreateChannel(channel); err != nil {
-		println("We failed to create the channel " + CHANNEL_LOG_NAME)
+		println("We failed to create the channel " + ch.Name)
 		PrintError(err)
 	} else {
 		debuggingChannel = channelResult.Data.(*model.Channel)
-		println("Looks like this might be the first run so we've created the channel " + CHANNEL_LOG_NAME)
+		println("Looks like this might be the first run so we've created the channel " + ch.Name)
 	}
 }
 
@@ -224,24 +212,6 @@ func HandleMsgFromDebuggingChannel(event *model.WebSocketEvent) {
 			SendMsgToDebuggingChannel("Yes I'm running", post.Id)
 			return
 		}
-
-		// if you see any word matching 'up' then respond
-		if matched, _ := regexp.MatchString(`(?:^|\W)up(?:$|\W)`, post.Message); matched {
-			SendMsgToDebuggingChannel("Yes I'm running", post.Id)
-			return
-		}
-
-		// if you see any word matching 'running' then respond
-		if matched, _ := regexp.MatchString(`(?:^|\W)running(?:$|\W)`, post.Message); matched {
-			SendMsgToDebuggingChannel("Yes I'm running", post.Id)
-			return
-		}
-
-		// if you see any word matching 'hello' then respond
-		if matched, _ := regexp.MatchString(`(?:^|\W)hello(?:$|\W)`, post.Message); matched {
-			SendMsgToDebuggingChannel("Yes I'm running", post.Id)
-			return
-		}
 	}
 
 	SendMsgToDebuggingChannel("I did not understand you!", post.Id)
@@ -263,7 +233,7 @@ func SetupGracefulShutdown() {
 				webSocketClient.Close()
 			}
 
-			SendMsgToDebuggingChannel("_"+SAMPLE_NAME+" has **stopped** running_", "")
+			SendMsgToDebuggingChannel("_Bot has **stopped** running_", "")
 			os.Exit(0)
 		}
 	}()

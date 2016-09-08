@@ -1,0 +1,19 @@
+{
+    "mattermost": {
+        "host": "localhost",
+        "port": "8065",
+        "bot": {
+            "email": "test@example.com",
+            "password": "admin",
+            "name": "nemoto",
+            "first_name": "Hoge",
+            "last_name": "Fuga"
+        },
+        "team": "FooTeam",
+        "channel": {
+            "name":"town-square",
+            "display_name": "Town Square",
+            "purpose": "Rewrite channel header"
+        }
+    }
+}
